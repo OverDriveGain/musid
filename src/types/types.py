@@ -26,3 +26,19 @@ class TrackResult(BaseModel):
     end_time: float     # seconds from start of file
     confidence: int     # number of chunks that matched
     output_file: str = ""
+
+
+class TrackEntry(BaseModel):
+    timestamp: str  # e.g. "0:00"
+    seconds: int
+    title: str
+
+
+class TracklistResponse(BaseModel):
+    status: str
+    music_id: str = ""
+    comment_author: str = ""
+    comment_text: str = ""
+    like_count: int = 0
+    tracks: list[TrackEntry] = []
+    message: str = ""

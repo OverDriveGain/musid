@@ -1,13 +1,33 @@
-from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+import asyncio
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+
 from src.config.config import config
+from src.middleware.error_handler import error_handler
 from src.routes.tag_routes import router
 from src.routes.tracklist_routes import router as tracklist_router
-from src.middleware.error_handler import error_handler
 
-app = FastAPI()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    worker_task = None
+    if config.get("redis_url"):
+        from src.workers.download_worker import run_worker
+        worker_task = asyncio.create_task(run_worker(config["redis_url"]))
+        print("[App] Download worker started")
+    yield
+    if worker_task:
+        worker_task.cancel()
+        try:
+            await worker_task
+        except asyncio.CancelledError:
+            pass
+
+
+app = FastAPI(lifespan=lifespan)
 
 app.add_exception_handler(Exception, error_handler)
 

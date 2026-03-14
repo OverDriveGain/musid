@@ -6,3 +6,4 @@ mutagen==1.47.0
 python-multipart==0.0.12
 pydub
 httpx
+redis[asyncio]

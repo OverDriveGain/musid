@@ -1,0 +1,29 @@
+services:
+  musid:
+    image: overdrivegain/musid:latest
+    container_name: musid
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    volumes:
+      - ${MUSIC_PATH:-/mnt/music}:/mnt/music
+    environment:
+      - PORT=3001
+      - YOUTUBE_SERVICE_URL=${YOUTUBE_SERVICE_URL:-http://host.docker.internal:8005}
+      - OLLAMA_URL=${OLLAMA_URL:-https://ollama.kaxtus.com}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:7b-instruct}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - MUSIC_PATH=/mnt/music
+      - DOWNLOAD_FOLDER=${DOWNLOAD_FOLDER:-YoutubeDownloads}
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:7-alpine
+    container_name: musid-redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+
+volumes:
+  redis_data:

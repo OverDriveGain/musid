@@ -19,7 +19,7 @@ async def detect_tracklist(music_id: str, max_comments: int = 100) -> dict:
     try:
         result = await detector.detect_from_batch(comments)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Ollama error: {e}")
+        raise HTTPException(status_code=502, detail=f"Claude error: {e}")
 
     if result:
         return {

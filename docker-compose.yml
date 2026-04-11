@@ -10,8 +10,8 @@ services:
     environment:
       - PORT=3001
       - YOUTUBE_SERVICE_URL=${YOUTUBE_SERVICE_URL:-http://host.docker.internal:8005}
-      - OLLAMA_URL=${OLLAMA_URL:-https://ollama.kaxtus.com}
-      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:7b-instruct}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-opus-4-6}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379}
       - MUSIC_PATH=/mnt/music
       - DOWNLOAD_FOLDER=${DOWNLOAD_FOLDER:-YoutubeDownloads}

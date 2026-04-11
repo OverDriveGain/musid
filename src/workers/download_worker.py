@@ -89,40 +89,40 @@ async def _identify_type(file_path: str) -> Tuple[int, List[Tuple[str, str]]]:
 
 
 async def _get_tracklist(youtube_url: str) -> List[Dict]:
-    """Try video description first (regex), then fall back to comments + Ollama."""
+    """Try video description first, then fall back to comments — both via Claude."""
     youtube_service = YoutubeCommentsService()
     detector = TracklistDetector()
 
-    # 1. Description (via Ollama)
+    # 1. Description (via Claude)
     print(f"[Worker] Fetching video description ...")
     try:
         description = await youtube_service.get_description(youtube_url)
         if description:
             print(f"[Worker] Description ({len(description)} chars):\n{description[:1000]}{'...' if len(description) > 1000 else ''}")
-            print(f"[Worker] Sending description to Ollama ...")
+            print(f"[Worker] Sending description to Claude ...")
             result = await detector.detect_from_description(description)
             if result:
                 print(f"[Worker]   ✓ Found {len(result['tracks'])} timestamps in description")
                 return [t.dict() for t in result["tracks"]]
             else:
-                print(f"[Worker]   ✗ Ollama found no tracklist in description")
+                print(f"[Worker]   ✗ Claude found no tracklist in description")
         else:
             print(f"[Worker]   ✗ Description is empty")
     except Exception as e:
         print(f"[Worker]   ✗ Description fetch failed: {e}")
 
-    # 2. Comments + Ollama
-    print(f"[Worker] Checking YouTube comments for tracklist (via Ollama) ...")
+    # 2. Comments + Claude
+    print(f"[Worker] Checking YouTube comments for tracklist (via Claude) ...")
     try:
         comments = await youtube_service.get_comments(youtube_url, max_results=100)
-        print(f"[Worker]   Fetched {len(comments)} comments, sending to Ollama ...")
+        print(f"[Worker]   Fetched {len(comments)} comments, sending to Claude ...")
         if comments:
             result = await detector.detect_from_batch(comments)
             if result and result.get("tracks"):
-                print(f"[Worker]   ✓ Found {len(result['tracks'])} tracks via Ollama")
+                print(f"[Worker]   ✓ Found {len(result['tracks'])} tracks via Claude")
                 return [t.dict() for t in result["tracks"]]
             else:
-                print(f"[Worker]   ✗ Ollama found no tracklist in comments")
+                print(f"[Worker]   ✗ Claude found no tracklist in comments")
         else:
             print(f"[Worker]   ✗ No comments available")
     except Exception as e:

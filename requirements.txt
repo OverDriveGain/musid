@@ -7,3 +7,4 @@ python-multipart==0.0.12
 pydub
 httpx
 redis[asyncio]
+anthropic

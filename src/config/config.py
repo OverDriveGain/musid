@@ -11,4 +11,5 @@ config = {
     "redis_url": os.getenv("REDIS_URL", ""),
     "music_path": os.getenv("MUSIC_PATH", "/mnt/music"),
     "download_folder": os.getenv("DOWNLOAD_FOLDER", "YoutubeDownloads"),
+    "telegram_bot_token": os.getenv("TELEGRAM_BOT_TOKEN", ""),
 }

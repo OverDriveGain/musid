@@ -5,6 +5,8 @@ import re
 import tempfile
 from typing import Dict, List, Optional, Tuple
 
+import httpx
+
 from mutagen.id3 import ID3, ID3NoHeaderError
 from pydub import AudioSegment
 from shazamio import Shazam
@@ -131,7 +133,7 @@ async def _get_tracklist(youtube_url: str) -> List[Dict]:
     return []
 
 
-async def _split_by_tracklist(file_path: str, tracks: List[Dict], video_title: str) -> None:
+async def _split_by_tracklist(file_path: str, tracks: List[Dict], video_title: str) -> Tuple[str, int]:
     import subprocess
     from mutagen.mp3 import MP3
     from mutagen.id3 import ID3, TIT2, TPE1, TALB, TRCK, ID3NoHeaderError
@@ -218,19 +220,23 @@ async def _split_by_tracklist(file_path: str, tracks: List[Dict], video_title: s
     os.remove(file_path)
     print(f"[Worker] Removed original: {os.path.basename(file_path)}")
 
+    return album_dir, len(split_paths)
 
-async def process_download(filename: str, video_url: str, title: str) -> None:
+
+async def process_download(filename: str, video_url: str, title: str) -> Optional[Dict]:
     file_path = _resolve_file(filename)
 
     if not os.path.isfile(file_path):
         print(f"[Worker] File not found: {file_path}")
-        return
+        return None
 
     print(f"[Worker] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     print(f"[Worker] New job: {filename}")
     print(f"[Worker] URL:     {video_url}")
 
     unique_count, _ = await _identify_type(file_path)
+
+    outcome: Dict
 
     if unique_count <= 1:
         # ── Single song ────────────────────────────────────────────────
@@ -249,12 +255,27 @@ async def process_download(filename: str, video_url: str, title: str) -> None:
         else:
             new_name = None
 
+        final_path = file_path
+        recognized = bool(new_name)
         if new_name and new_name != os.path.basename(file_path):
             new_path = os.path.join(os.path.dirname(file_path), new_name)
             os.rename(file_path, new_path)
+            final_path = new_path
             print(f"[Worker]   Renamed → {new_name}")
         else:
             print(f"[Worker]   Skipped rename (could not identify title)")
+
+        outcome = {
+            "kind": "single",
+            "status": "recognized" if recognized else "unrecognized",
+            "original_filename": filename,
+            "final_filename": os.path.basename(final_path),
+            "final_path": final_path,
+            "final_dir": os.path.dirname(final_path),
+            "artist": result.artist or "",
+            "title": result.title or "",
+            "album": result.album or "",
+        }
 
     else:
         # ── Album ──────────────────────────────────────────────────────
@@ -263,17 +284,92 @@ async def process_download(filename: str, video_url: str, title: str) -> None:
         youtube_url = _read_youtube_url(file_path) or video_url
         if not youtube_url:
             print(f"[Worker] No YouTube URL available — cannot look up timestamps. Skipping split.")
-            return
+            return {
+                "kind": "album",
+                "status": "no_split",
+                "original_filename": filename,
+                "final_filename": os.path.basename(file_path),
+                "final_path": file_path,
+                "final_dir": os.path.dirname(file_path),
+                "track_count": unique_count,
+            }
 
         tracklist = await _get_tracklist(youtube_url)
 
         if tracklist:
-            await _split_by_tracklist(file_path, tracklist, title)
+            album_dir, track_count = await _split_by_tracklist(file_path, tracklist, title)
+            outcome = {
+                "kind": "album",
+                "status": "split",
+                "original_filename": filename,
+                "album_dir": album_dir,
+                "final_dir": album_dir,
+                "track_count": track_count,
+            }
         else:
             print(f"[Worker] Could not find timestamps in description or comments — skipping split.")
+            outcome = {
+                "kind": "album",
+                "status": "no_split",
+                "original_filename": filename,
+                "final_filename": os.path.basename(file_path),
+                "final_path": file_path,
+                "final_dir": os.path.dirname(file_path),
+                "track_count": unique_count,
+            }
 
     print(f"[Worker] Done: {filename}")
     print(f"[Worker] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    return outcome
+
+
+def _build_notify_message(outcome: Dict) -> str:
+    """Human-readable Telegram summary of what musid recognized + where it saved it."""
+    if outcome["kind"] == "single":
+        if outcome["status"] == "recognized":
+            artist, title = outcome.get("artist"), outcome.get("title")
+            name = f"{artist} - {title}" if artist and title else (title or outcome["final_filename"])
+            return (
+                f"✅ Recognized: {name}\n"
+                f"Saved as: {outcome['final_filename']}\n"
+                f"📁 {outcome['final_dir']}"
+            )
+        return (
+            f"⚠️ Downloaded but Shazam couldn't identify it.\n"
+            f"Saved as: {outcome['final_filename']}\n"
+            f"📁 {outcome['final_dir']}"
+        )
+    # album
+    if outcome["status"] == "split":
+        return (
+            f"✅ Recognized as a set — split into {outcome['track_count']} track(s).\n"
+            f"📁 {outcome['final_dir']}"
+        )
+    return (
+        f"⚠️ Multiple songs detected but no tracklist found — kept as one file.\n"
+        f"Saved as: {outcome['final_filename']}\n"
+        f"📁 {outcome['final_dir']}"
+    )
+
+
+async def _notify_telegram(chat_id, outcome: Dict) -> None:
+    """Notify the originating Telegram chat that recognition/tagging is done."""
+    token = config.get("telegram_bot_token", "")
+    if not token or chat_id in (None, ""):
+        if not token:
+            print(f"[Notify] TELEGRAM_BOT_TOKEN not set — skipping Telegram notify")
+        return
+    text = _build_notify_message(outcome)
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(url, json={"chat_id": chat_id, "text": text})
+        if resp.status_code == 200:
+            print(f"[Notify] Telegram notified chat {chat_id}")
+        else:
+            print(f"[Notify] Telegram sendMessage failed {resp.status_code}: {resp.text[:200]}")
+    except Exception as e:
+        print(f"[Notify] Telegram send error: {e}")
 
 
 async def run_worker(redis_url: str) -> None:
@@ -294,13 +390,16 @@ async def run_worker(redis_url: str) -> None:
             filename = job.get("filename", "")
             video_url = job.get("videoUrl", "")
             title = job.get("title", "")
+            chat_id = job.get("chatId")
 
             if not filename:
                 print(f"[Worker] Invalid job (no filename): {data}")
                 continue
 
             try:
-                await process_download(filename, video_url, title)
+                outcome = await process_download(filename, video_url, title)
+                if chat_id and outcome:
+                    await _notify_telegram(chat_id, outcome)
             except Exception as e:
                 print(f"[Worker] Error processing {filename}: {e}")
 

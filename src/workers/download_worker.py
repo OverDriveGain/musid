@@ -136,7 +136,7 @@ async def _get_tracklist(youtube_url: str) -> List[Dict]:
 async def _split_by_tracklist(file_path: str, tracks: List[Dict], video_title: str) -> Tuple[str, int]:
     import subprocess
     from mutagen.mp3 import MP3
-    from mutagen.id3 import ID3, TIT2, TPE1, TALB, TRCK, ID3NoHeaderError
+    from mutagen.id3 import ID3, TIT2, TPE1, TPE2, TALB, TRCK, TCMP, ID3NoHeaderError
 
     audio_info = MP3(file_path)
     total_s = audio_info.info.length
@@ -188,10 +188,37 @@ async def _split_by_tracklist(file_path: str, tracks: List[Dict], video_title: s
 
     # Always use video title as album — keeps all tracks from the same video grouped together
     final_album = video_title
-    print(f"[Worker] Album: '{final_album}' (video title — keeps all tracks together)")
+
+    # Pick ONE album artist for the whole video so the music library (Navidrome)
+    # shows a SINGLE album. Navidrome groups albums by (album, album-artist);
+    # without a consistent album-artist it falls back to each track's own artist
+    # and splits one video into one album per artist. Dominant Shazam artist →
+    # that artist; mixed → "Various Artists" + compilation flag; none recognized
+    # → derive from the video title, else "Various Artists".
+    from collections import Counter
+    rec_artists = [
+        (sr.artist or "").strip()
+        for _, _, _, sr in shazam_results
+        if sr and (sr.artist or "").strip()
+    ]
+    distinct = set(rec_artists)
+    if len(distinct) == 1:
+        album_artist, is_comp = next(iter(distinct)), False
+    elif rec_artists:
+        top, n = Counter(rec_artists).most_common(1)[0]
+        album_artist = top if n >= 0.7 * len(rec_artists) else "Various Artists"
+        is_comp = True
+    else:
+        guess = re.split(r"\s[-–|]\s", video_title, 1)[0].strip() if video_title else ""
+        album_artist, is_comp = (guess or "Various Artists"), True
+    print(
+        f"[Worker] Album: '{final_album}' | album artist: '{album_artist}'"
+        f"{' (compilation)' if is_comp else ''}"
+    )
 
     # Write ID3 tags and rename files
     print(f"[Worker] Writing tags ...")
+    total = len(shazam_results)
     for i, out_path, tracklist_title, shazam_result in shazam_results:
         final_title = (shazam_result.title if shazam_result else None) or tracklist_title
         final_artist = (shazam_result.artist if shazam_result else None) or ""
@@ -205,9 +232,12 @@ async def _split_by_tracklist(file_path: str, tracks: List[Dict], video_title: s
             if final_artist:
                 tags["TPE1"] = TPE1(encoding=3, text=final_artist)
             tags["TALB"] = TALB(encoding=3, text=final_album)
-            tags["TRCK"] = TRCK(encoding=3, text=str(i))
+            tags["TPE2"] = TPE2(encoding=3, text=album_artist)   # album artist → one album in the library
+            tags["TRCK"] = TRCK(encoding=3, text=f"{i}/{total}")
+            if is_comp:
+                tags["TCMP"] = TCMP(encoding=3, text="1")        # iTunes/Navidrome compilation flag
             tags.save(out_path)
-            print(f"[Worker]   {i:02d} tagged: {final_artist} - {final_title} [{final_album}]")
+            print(f"[Worker]   {i:02d} tagged: {final_artist} - {final_title} [{final_album} / {album_artist}]")
         except Exception as e:
             print(f"[Worker]   ✗ Tag write failed for track {i}: {e}")
 

@@ -12,4 +12,8 @@ config = {
     "music_path": os.getenv("MUSIC_PATH", "/mnt/music"),
     "download_folder": os.getenv("DOWNLOAD_FOLDER", "YoutubeDownloads"),
     "telegram_bot_token": os.getenv("TELEGRAM_BOT_TOKEN", ""),
+    # musdowlow, for the post-recognition "add to playlist" callback (it owns the
+    # Navidrome integration). Token = musdowlow's FILE_LINK_MINT_TOKEN.
+    "musdowlow_url": os.getenv("MUSDOWLOW_URL", ""),
+    "musdowlow_token": os.getenv("MUSDOWLOW_MINT_TOKEN", ""),
 }

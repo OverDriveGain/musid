@@ -382,6 +382,42 @@ def _build_notify_message(outcome: Dict) -> str:
     )
 
 
+async def _add_to_playlist(playlist: str, outcome: Dict) -> None:
+    """Add the final file(s) to a Navidrome playlist via musdowlow.
+
+    Only the worker knows the final filename (it renames after Shazam), so
+    musdowlow defers the playlist step to us. Records the result on `outcome`
+    so the Telegram notify can mention it. Never raises."""
+    base = config.get("musdowlow_url", "")
+    if not base:
+        print("[Playlist] MUSDOWLOW_URL not set — skipping playlist add")
+        return
+    downloads = _downloads_dir()
+    if outcome["kind"] == "album" and outcome["status"] == "split":
+        files = sorted(f for f in os.listdir(outcome["final_dir"]) if f.lower().endswith(".mp3"))
+        paths = [os.path.relpath(os.path.join(outcome["final_dir"], f), downloads) for f in files]
+    else:
+        paths = [os.path.relpath(outcome["final_path"], downloads)]
+    added = 0
+    headers = {"x-mint-token": config.get("musdowlow_token", "")}
+    async with httpx.AsyncClient(timeout=90) as client:
+        for rel in paths:
+            try:
+                resp = await client.post(
+                    f"{base}/api/library/playlist-add",
+                    json={"path": rel, "playlist": playlist},
+                    headers=headers,
+                )
+                if resp.status_code == 200:
+                    added += 1
+                    print(f"[Playlist] Added {rel} → \"{playlist}\"")
+                else:
+                    print(f"[Playlist] Add failed {resp.status_code} for {rel}: {resp.text[:200]}")
+            except Exception as e:
+                print(f"[Playlist] Add error for {rel}: {e}")
+    outcome["playlist"] = {"name": playlist, "added": added, "total": len(paths)}
+
+
 async def _notify_telegram(chat_id, outcome: Dict) -> None:
     """Notify the originating Telegram chat that recognition/tagging is done."""
     token = config.get("telegram_bot_token", "")
@@ -390,6 +426,14 @@ async def _notify_telegram(chat_id, outcome: Dict) -> None:
             print(f"[Notify] TELEGRAM_BOT_TOKEN not set — skipping Telegram notify")
         return
     text = _build_notify_message(outcome)
+    pl = outcome.get("playlist")
+    if pl:
+        if pl["added"] and pl["added"] == pl["total"]:
+            text += f"\n🎧 Added to playlist \"{pl['name']}\""
+        elif pl["added"]:
+            text += f"\n🎧 Added {pl['added']}/{pl['total']} track(s) to playlist \"{pl['name']}\""
+        else:
+            text += f"\n⚠️ Could not add to playlist \"{pl['name']}\""
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     try:
         async with httpx.AsyncClient(timeout=15) as client:
@@ -421,6 +465,7 @@ async def run_worker(redis_url: str) -> None:
             video_url = job.get("videoUrl", "")
             title = job.get("title", "")
             chat_id = job.get("chatId")
+            playlist = job.get("playlist")
 
             if not filename:
                 print(f"[Worker] Invalid job (no filename): {data}")
@@ -428,6 +473,8 @@ async def run_worker(redis_url: str) -> None:
 
             try:
                 outcome = await process_download(filename, video_url, title)
+                if playlist and outcome:
+                    await _add_to_playlist(playlist, outcome)
                 if chat_id and outcome:
                     await _notify_telegram(chat_id, outcome)
             except Exception as e:
